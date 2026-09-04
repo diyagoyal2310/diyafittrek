@@ -27,10 +27,15 @@ resource "aws_instance" "fittrek" {
   associate_public_ip_address = true
 
   user_data = <<-EOF
-              #!/bin/bash
-              apt-get update -y
-              apt-get install -y nodejs npm git
-              EOF
+            #!/bin/bash
+            apt-get update -y
+            apt-get install -y curl git
+
+            curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
+            apt-get install -y nodejs
+
+            npm install -g pm2
+            EOF
 
   tags = {
     Name = "${var.project_name}-server"
