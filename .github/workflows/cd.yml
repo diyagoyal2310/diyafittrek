@@ -11,15 +11,17 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # --------------------------------------------------
-      # 1. Get the latest code
-      # --------------------------------------------------
+
+      # ==========================================
+      # 1. Checkout code
+      # ==========================================
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # --------------------------------------------------
-      # 2. Configure SSH
-      # --------------------------------------------------
+
+      # ==========================================
+      # 2. Setup SSH
+      # ==========================================
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
@@ -30,89 +32,88 @@ jobs:
 
           ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
 
-      # --------------------------------------------------
+
+      # ==========================================
       # 3. Prepare EC2
-      #    Install Node.js 24 and PM2 if required
-      # --------------------------------------------------
+      # ==========================================
       - name: Prepare EC2
         run: |
-          ssh -i ~/.ssh/fittrek.pem \
-            ubuntu@${{ secrets.EC2_HOST }} << 'EOF'
+          ssh -i ~/.ssh/fittrek.pem ubuntu@${{ secrets.EC2_HOST }} "bash -s" <<'REMOTE_SCRIPT'
+          set -e
 
-            set -e
+          echo "================================="
+          echo "Preparing EC2"
+          echo "================================="
 
-            echo "================================="
-            echo "Preparing EC2"
-            echo "================================="
+          echo "Checking Node.js..."
 
-            echo "Checking Node.js..."
+          if ! command -v node >/dev/null 2>&1 || ! node -v | grep -q '^v24\.'; then
 
-            if ! command -v node >/dev/null 2>&1 || ! node -v | grep -q '^v24\.'; then
+            echo "Installing Node.js 24..."
 
-              echo "Node.js 24 not found."
-              echo "Installing Node.js 24..."
+            sudo apt-get update -y
+            sudo apt-get install -y curl
 
-              sudo apt-get update -y
-              sudo apt-get install -y curl
+            curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
 
-              curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
+            sudo apt-get install -y nodejs
 
-              sudo apt-get install -y nodejs
+          else
 
-            else
+            echo "Node.js 24 already installed."
 
-              echo "Node.js 24 already installed."
-
-            fi
+          fi
 
 
-            echo "Checking PM2..."
+          echo "Checking PM2..."
 
-            if ! command -v pm2 >/dev/null 2>&1; then
+          if ! command -v pm2 >/dev/null 2>&1; then
 
-              echo "PM2 not found."
-              echo "Installing PM2..."
+            echo "Installing PM2..."
 
-              sudo npm install -g pm2
+            sudo npm install -g pm2
 
-            else
+          else
 
-              echo "PM2 already installed."
+            echo "PM2 already installed."
 
-            fi
+          fi
 
 
-            echo "================================="
-            echo "Versions"
-            echo "================================="
+          echo "================================="
+          echo "Installed versions"
+          echo "================================="
 
-            echo "Node:"
-            node -v
+          echo "Node:"
+          node -v
 
-            echo "npm:"
-            npm -v
+          echo "npm:"
+          npm -v
 
-            echo "PM2:"
-            pm2 -v
+          echo "PM2:"
+          pm2 -v
 
-            echo "EC2 preparation successful."
+          echo "================================="
+          echo "EC2 preparation successful."
+          echo "================================="
 
-            EOF
+          REMOTE_SCRIPT
 
-      # --------------------------------------------------
+
+      # ==========================================
       # 4. Copy application to EC2
-      # --------------------------------------------------
+      # ==========================================
       - name: Copy application to EC2
         run: |
-          echo "Copying FitTrek application to EC2..."
+          echo "Copying FitTrek application..."
 
           tar \
             --exclude=node_modules \
             --exclude=.next \
             --exclude=.git \
             --exclude=terraform/.terraform \
-            --exclude=terraform/*.tfstate \
-            --exclude=terraform/*.tfstate.* \
+            --exclude='terraform/*.tfstate' \
+            --exclude='terraform/*.tfstate.*' \
             -czf - . | \
           ssh -i ~/.ssh/fittrek.pem \
             ubuntu@${{ secrets.EC2_HOST }} \
@@ -122,161 +123,174 @@ jobs:
 
           echo "Application copied successfully."
 
-      # --------------------------------------------------
+
+      # ==========================================
       # 5. Create production environment
-      # --------------------------------------------------
+      # ==========================================
       - name: Create production environment
         run: |
-          ssh -i ~/.ssh/fittrek.pem \
-            ubuntu@${{ secrets.EC2_HOST }} << EOF
+          ssh -i ~/.ssh/fittrek.pem ubuntu@${{ secrets.EC2_HOST }} "bash -s" <<'REMOTE_SCRIPT'
+          set -e
 
-            set -e
+          cd /home/ubuntu/fittrek
 
-            cd /home/ubuntu/fittrek
+          echo "Creating production environment..."
 
-            cat > .env << ENVEOF
+          cat > .env <<'ENV_FILE'
           DATABASE_URL="file:./dev.db"
-          AUTH_SECRET="${{ secrets.AUTH_SECRET }}"
-          HEALTH_WEBHOOK_SECRET="${{ secrets.HEALTH_WEBHOOK_SECRET }}"
-          ENVEOF
+          AUTH_SECRET="${AUTH_SECRET_VALUE}"
+          HEALTH_WEBHOOK_SECRET="${HEALTH_WEBHOOK_SECRET_VALUE}"
+          ENV_FILE
 
-            echo "Production environment created."
+          echo "Production environment created."
 
-          EOF
+          REMOTE_SCRIPT
+        env:
+          AUTH_SECRET_VALUE: ${{ secrets.AUTH_SECRET }}
+          HEALTH_WEBHOOK_SECRET_VALUE: ${{ secrets.HEALTH_WEBHOOK_SECRET }}
 
-      # --------------------------------------------------
+
+      # ==========================================
       # 6. Install dependencies
-      # --------------------------------------------------
+      # ==========================================
       - name: Install dependencies
         run: |
-          ssh -i ~/.ssh/fittrek.pem \
-            ubuntu@${{ secrets.EC2_HOST }} << 'EOF'
+          ssh -i ~/.ssh/fittrek.pem ubuntu@${{ secrets.EC2_HOST }} "bash -s" <<'REMOTE_SCRIPT'
+          set -e
 
-            set -e
+          cd /home/ubuntu/fittrek
 
-            cd /home/ubuntu/fittrek
+          echo "================================="
+          echo "Installing dependencies"
+          echo "================================="
 
-            echo "Installing dependencies..."
+          npm ci
 
-            npm ci
+          echo "Dependencies installed successfully."
 
-            echo "Dependencies installed successfully."
+          REMOTE_SCRIPT
 
-            EOF
 
-      # --------------------------------------------------
+      # ==========================================
       # 7. Generate Prisma Client
-      # --------------------------------------------------
+      # ==========================================
       - name: Generate Prisma Client
         run: |
-          ssh -i ~/.ssh/fittrek.pem \
-            ubuntu@${{ secrets.EC2_HOST }} << 'EOF'
+          ssh -i ~/.ssh/fittrek.pem ubuntu@${{ secrets.EC2_HOST }} "bash -s" <<'REMOTE_SCRIPT'
+          set -e
 
-            set -e
+          cd /home/ubuntu/fittrek
 
-            cd /home/ubuntu/fittrek
+          echo "================================="
+          echo "Generating Prisma Client"
+          echo "================================="
 
-            echo "Generating Prisma Client..."
+          npx prisma generate
 
-            npx prisma generate
+          echo "Prisma Client generated successfully."
 
-            echo "Prisma Client generated successfully."
+          REMOTE_SCRIPT
 
-            EOF
 
-      # --------------------------------------------------
+      # ==========================================
       # 8. Update database
-      # --------------------------------------------------
+      # ==========================================
       - name: Update database
         run: |
-          ssh -i ~/.ssh/fittrek.pem \
-            ubuntu@${{ secrets.EC2_HOST }} << 'EOF'
+          ssh -i ~/.ssh/fittrek.pem ubuntu@${{ secrets.EC2_HOST }} "bash -s" <<'REMOTE_SCRIPT'
+          set -e
 
-            set -e
+          cd /home/ubuntu/fittrek
 
-            cd /home/ubuntu/fittrek
+          echo "================================="
+          echo "Updating database"
+          echo "================================="
 
-            echo "Updating database..."
+          npx prisma db push
 
-            npx prisma db push
+          echo "Database updated successfully."
 
-            echo "Database updated successfully."
+          REMOTE_SCRIPT
 
-            EOF
 
-      # --------------------------------------------------
+      # ==========================================
       # 9. Build Next.js application
-      # --------------------------------------------------
+      # ==========================================
       - name: Build application
         run: |
-          ssh -i ~/.ssh/fittrek.pem \
-            ubuntu@${{ secrets.EC2_HOST }} << 'EOF'
+          ssh -i ~/.ssh/fittrek.pem ubuntu@${{ secrets.EC2_HOST }} "bash -s" <<'REMOTE_SCRIPT'
+          set -e
 
-            set -e
+          cd /home/ubuntu/fittrek
 
-            cd /home/ubuntu/fittrek
+          echo "================================="
+          echo "Building FitTrek"
+          echo "================================="
 
-            echo "Building FitTrek..."
+          npm run build
 
-            npm run build
+          echo "Build completed successfully."
 
-            echo "Build completed successfully."
+          REMOTE_SCRIPT
 
-            EOF
 
-      # --------------------------------------------------
+      # ==========================================
       # 10. Start application with PM2
-      # --------------------------------------------------
+      # ==========================================
       - name: Start application with PM2
         run: |
-          ssh -i ~/.ssh/fittrek.pem \
-            ubuntu@${{ secrets.EC2_HOST }} << 'EOF'
+          ssh -i ~/.ssh/fittrek.pem ubuntu@${{ secrets.EC2_HOST }} "bash -s" <<'REMOTE_SCRIPT'
+          set -e
 
-            set -e
+          cd /home/ubuntu/fittrek
 
-            cd /home/ubuntu/fittrek
+          echo "================================="
+          echo "Starting FitTrek"
+          echo "================================="
 
-            echo "Stopping previous FitTrek process..."
+          echo "Stopping previous application..."
 
-            pm2 delete fittrek || true
+          pm2 delete fittrek || true
 
-            echo "Starting FitTrek..."
+          echo "Starting new application..."
 
-            pm2 start npm --name fittrek -- start
+          pm2 start npm --name fittrek -- start
 
-            echo "Saving PM2 process..."
+          echo "Saving PM2 process..."
 
-            pm2 save
+          pm2 save
 
-            echo "Application status:"
+          echo "Application status:"
 
-            pm2 status
+          pm2 status
 
-            EOF
+          REMOTE_SCRIPT
 
-      # --------------------------------------------------
+
+      # ==========================================
       # 11. Verify application
-      # --------------------------------------------------
+      # ==========================================
       - name: Verify application
         run: |
-          echo "Waiting for application to start..."
+          echo "Waiting for FitTrek to start..."
 
           sleep 10
 
-          ssh -i ~/.ssh/fittrek.pem \
-            ubuntu@${{ secrets.EC2_HOST }} << 'EOF'
+          ssh -i ~/.ssh/fittrek.pem ubuntu@${{ secrets.EC2_HOST }} "bash -s" <<'REMOTE_SCRIPT'
+          set -e
 
-            set -e
+          echo "================================="
+          echo "Checking FitTrek"
+          echo "================================="
 
-            echo "Checking FitTrek..."
+          curl -f http://localhost:3000
 
-            curl -f http://localhost:3000
+          echo ""
 
-            echo ""
-            echo "================================="
-            echo "FitTrek deployed successfully!"
-            echo "================================="
+          echo "================================="
+          echo "FitTrek deployed successfully!"
+          echo "================================="
 
-            pm2 status
+          pm2 status
 
-            EOF
+          REMOTE_SCRIPT
