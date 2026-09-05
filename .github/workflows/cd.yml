@@ -7,19 +7,276 @@ on:
 
 jobs:
   deploy:
-    name: Deploy FitTrek to AWS
+    name: Deploy FitTrek to EC2
     runs-on: ubuntu-latest
 
     steps:
+      # --------------------------------------------------
+      # 1. Get the latest code
+      # --------------------------------------------------
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ap-south-1
+      # --------------------------------------------------
+      # 2. Configure SSH
+      # --------------------------------------------------
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
 
-      - name: Check AWS connection
-        run: aws sts get-caller-identity
+          printf '%s\n' "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/fittrek.pem
+
+          chmod 600 ~/.ssh/fittrek.pem
+
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
+
+      # --------------------------------------------------
+      # 3. Prepare EC2
+      #    Install Node.js 24 and PM2 if required
+      # --------------------------------------------------
+      - name: Prepare EC2
+        run: |
+          ssh -i ~/.ssh/fittrek.pem \
+            ubuntu@${{ secrets.EC2_HOST }} << 'EOF'
+
+            set -e
+
+            echo "================================="
+            echo "Preparing EC2"
+            echo "================================="
+
+            echo "Checking Node.js..."
+
+            if ! command -v node >/dev/null 2>&1 || ! node -v | grep -q '^v24\.'; then
+
+              echo "Node.js 24 not found."
+              echo "Installing Node.js 24..."
+
+              sudo apt-get update -y
+              sudo apt-get install -y curl
+
+              curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
+
+              sudo apt-get install -y nodejs
+
+            else
+
+              echo "Node.js 24 already installed."
+
+            fi
+
+
+            echo "Checking PM2..."
+
+            if ! command -v pm2 >/dev/null 2>&1; then
+
+              echo "PM2 not found."
+              echo "Installing PM2..."
+
+              sudo npm install -g pm2
+
+            else
+
+              echo "PM2 already installed."
+
+            fi
+
+
+            echo "================================="
+            echo "Versions"
+            echo "================================="
+
+            echo "Node:"
+            node -v
+
+            echo "npm:"
+            npm -v
+
+            echo "PM2:"
+            pm2 -v
+
+            echo "EC2 preparation successful."
+
+            EOF
+
+      # --------------------------------------------------
+      # 4. Copy application to EC2
+      # --------------------------------------------------
+      - name: Copy application to EC2
+        run: |
+          echo "Copying FitTrek application to EC2..."
+
+          tar \
+            --exclude=node_modules \
+            --exclude=.next \
+            --exclude=.git \
+            --exclude=terraform/.terraform \
+            --exclude=terraform/*.tfstate \
+            --exclude=terraform/*.tfstate.* \
+            -czf - . | \
+          ssh -i ~/.ssh/fittrek.pem \
+            ubuntu@${{ secrets.EC2_HOST }} \
+            "rm -rf /home/ubuntu/fittrek && \
+             mkdir -p /home/ubuntu/fittrek && \
+             tar -xzf - -C /home/ubuntu/fittrek"
+
+          echo "Application copied successfully."
+
+      # --------------------------------------------------
+      # 5. Create production environment
+      # --------------------------------------------------
+      - name: Create production environment
+        run: |
+          ssh -i ~/.ssh/fittrek.pem \
+            ubuntu@${{ secrets.EC2_HOST }} << EOF
+
+            set -e
+
+            cd /home/ubuntu/fittrek
+
+            cat > .env << ENVEOF
+          DATABASE_URL="file:./dev.db"
+          AUTH_SECRET="${{ secrets.AUTH_SECRET }}"
+          HEALTH_WEBHOOK_SECRET="${{ secrets.HEALTH_WEBHOOK_SECRET }}"
+          ENVEOF
+
+            echo "Production environment created."
+
+          EOF
+
+      # --------------------------------------------------
+      # 6. Install dependencies
+      # --------------------------------------------------
+      - name: Install dependencies
+        run: |
+          ssh -i ~/.ssh/fittrek.pem \
+            ubuntu@${{ secrets.EC2_HOST }} << 'EOF'
+
+            set -e
+
+            cd /home/ubuntu/fittrek
+
+            echo "Installing dependencies..."
+
+            npm ci
+
+            echo "Dependencies installed successfully."
+
+            EOF
+
+      # --------------------------------------------------
+      # 7. Generate Prisma Client
+      # --------------------------------------------------
+      - name: Generate Prisma Client
+        run: |
+          ssh -i ~/.ssh/fittrek.pem \
+            ubuntu@${{ secrets.EC2_HOST }} << 'EOF'
+
+            set -e
+
+            cd /home/ubuntu/fittrek
+
+            echo "Generating Prisma Client..."
+
+            npx prisma generate
+
+            echo "Prisma Client generated successfully."
+
+            EOF
+
+      # --------------------------------------------------
+      # 8. Update database
+      # --------------------------------------------------
+      - name: Update database
+        run: |
+          ssh -i ~/.ssh/fittrek.pem \
+            ubuntu@${{ secrets.EC2_HOST }} << 'EOF'
+
+            set -e
+
+            cd /home/ubuntu/fittrek
+
+            echo "Updating database..."
+
+            npx prisma db push
+
+            echo "Database updated successfully."
+
+            EOF
+
+      # --------------------------------------------------
+      # 9. Build Next.js application
+      # --------------------------------------------------
+      - name: Build application
+        run: |
+          ssh -i ~/.ssh/fittrek.pem \
+            ubuntu@${{ secrets.EC2_HOST }} << 'EOF'
+
+            set -e
+
+            cd /home/ubuntu/fittrek
+
+            echo "Building FitTrek..."
+
+            npm run build
+
+            echo "Build completed successfully."
+
+            EOF
+
+      # --------------------------------------------------
+      # 10. Start application with PM2
+      # --------------------------------------------------
+      - name: Start application with PM2
+        run: |
+          ssh -i ~/.ssh/fittrek.pem \
+            ubuntu@${{ secrets.EC2_HOST }} << 'EOF'
+
+            set -e
+
+            cd /home/ubuntu/fittrek
+
+            echo "Stopping previous FitTrek process..."
+
+            pm2 delete fittrek || true
+
+            echo "Starting FitTrek..."
+
+            pm2 start npm --name fittrek -- start
+
+            echo "Saving PM2 process..."
+
+            pm2 save
+
+            echo "Application status:"
+
+            pm2 status
+
+            EOF
+
+      # --------------------------------------------------
+      # 11. Verify application
+      # --------------------------------------------------
+      - name: Verify application
+        run: |
+          echo "Waiting for application to start..."
+
+          sleep 10
+
+          ssh -i ~/.ssh/fittrek.pem \
+            ubuntu@${{ secrets.EC2_HOST }} << 'EOF'
+
+            set -e
+
+            echo "Checking FitTrek..."
+
+            curl -f http://localhost:3000
+
+            echo ""
+            echo "================================="
+            echo "FitTrek deployed successfully!"
+            echo "================================="
+
+            pm2 status
+
+            EOF
