@@ -35,7 +35,7 @@ jobs:
 
       # ==========================================
       # 3. Prepare EC2
-      #    Node.js + PM2 + Swap
+      #    Node + PM2 + Swap + Disk cleanup
       # ==========================================
       - name: Prepare EC2
         run: |
@@ -45,6 +45,40 @@ jobs:
           echo "================================="
           echo "Preparing EC2"
           echo "================================="
+
+          # ------------------------------------------
+          # Clean APT cache
+          # ------------------------------------------
+          echo "Cleaning APT cache..."
+
+          sudo apt-get clean
+          sudo apt-get autoremove -y || true
+
+
+          # ------------------------------------------
+          # Remove old npm cache
+          # ------------------------------------------
+          echo "Cleaning npm cache..."
+
+          npm cache clean --force || true
+
+
+          # ------------------------------------------
+          # Remove old application build
+          # ------------------------------------------
+          if [ -d /home/ubuntu/fittrek/.next ]; then
+            echo "Removing old Next.js build..."
+            rm -rf /home/ubuntu/fittrek/.next
+          fi
+
+
+          # ------------------------------------------
+          # Remove old node_modules
+          # ------------------------------------------
+          if [ -d /home/ubuntu/fittrek/node_modules ]; then
+            echo "Removing old node_modules..."
+            rm -rf /home/ubuntu/fittrek/node_modules
+          fi
 
 
           # ------------------------------------------
@@ -89,7 +123,7 @@ jobs:
 
 
           # ------------------------------------------
-          # 2GB Swap
+          # Swap
           # ------------------------------------------
           echo "Checking swap..."
 
@@ -102,8 +136,6 @@ jobs:
             sudo mkswap /swapfile
             sudo swapon /swapfile
 
-            echo "2GB swap enabled."
-
           else
 
             echo "Swap already exists."
@@ -112,31 +144,27 @@ jobs:
 
 
           # ------------------------------------------
-          # Memory
+          # Disk information
           # ------------------------------------------
+          echo "================================="
+          echo "Disk information"
+          echo "================================="
+
+          df -h /
+
           echo "================================="
           echo "Memory information"
           echo "================================="
 
           free -h
 
-
-          # ------------------------------------------
-          # Versions
-          # ------------------------------------------
           echo "================================="
           echo "Software versions"
           echo "================================="
 
-          echo "Node:"
           node -v
-
-          echo "npm:"
           npm -v
-
-          echo "PM2:"
           pm2 -v
-
 
           echo "================================="
           echo "EC2 preparation successful."
@@ -146,7 +174,7 @@ jobs:
 
 
       # ==========================================
-      # 4. Copy application to EC2
+      # 4. Copy application
       # ==========================================
       - name: Copy application to EC2
         run: |
@@ -214,7 +242,7 @@ jobs:
           echo "Installing dependencies"
           echo "================================="
 
-          npm ci
+          npm ci --no-audit --no-fund
 
           echo "Dependencies installed successfully."
 
@@ -232,9 +260,7 @@ jobs:
 
           cd /home/ubuntu/fittrek
 
-          echo "================================="
-          echo "Generating Prisma Client"
-          echo "================================="
+          echo "Generating Prisma Client..."
 
           npx prisma generate
 
@@ -254,9 +280,7 @@ jobs:
 
           cd /home/ubuntu/fittrek
 
-          echo "================================="
-          echo "Updating database"
-          echo "================================="
+          echo "Updating database..."
 
           npx prisma db push
 
@@ -266,7 +290,7 @@ jobs:
 
 
       # ==========================================
-      # 9. Build Next.js application
+      # 9. Build application
       # ==========================================
       - name: Build application
         run: |
@@ -306,13 +330,13 @@ jobs:
 
           pm2 delete fittrek || true
 
-          echo "Starting new application..."
+          echo "Starting FitTrek..."
 
           pm2 start npm --name fittrek -- start
 
           echo "Saving PM2 process..."
 
-          pm2 save
+          pm2 save || true
 
           echo "Application status:"
 
@@ -347,5 +371,11 @@ jobs:
           echo "================================="
 
           pm2 status
+
+          echo "================================="
+          echo "Final disk usage"
+          echo "================================="
+
+          df -h /
 
           REMOTE_SCRIPT
