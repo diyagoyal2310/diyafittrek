@@ -35,6 +35,7 @@ jobs:
 
       # ==========================================
       # 3. Prepare EC2
+      #    Node.js + PM2 + Swap
       # ==========================================
       - name: Prepare EC2
         run: |
@@ -45,6 +46,10 @@ jobs:
           echo "Preparing EC2"
           echo "================================="
 
+
+          # ------------------------------------------
+          # Node.js 24
+          # ------------------------------------------
           echo "Checking Node.js..."
 
           if ! command -v node >/dev/null 2>&1 || ! node -v | grep -q '^v24\.'; then
@@ -65,6 +70,9 @@ jobs:
           fi
 
 
+          # ------------------------------------------
+          # PM2
+          # ------------------------------------------
           echo "Checking PM2..."
 
           if ! command -v pm2 >/dev/null 2>&1; then
@@ -80,8 +88,44 @@ jobs:
           fi
 
 
+          # ------------------------------------------
+          # 2GB Swap
+          # ------------------------------------------
+          echo "Checking swap..."
+
+          if ! sudo swapon --show | grep -q '/swapfile'; then
+
+            echo "Creating 2GB swap..."
+
+            sudo fallocate -l 2G /swapfile
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile
+            sudo swapon /swapfile
+
+            echo "2GB swap enabled."
+
+          else
+
+            echo "Swap already exists."
+
+          fi
+
+
+          # ------------------------------------------
+          # Memory
+          # ------------------------------------------
           echo "================================="
-          echo "Installed versions"
+          echo "Memory information"
+          echo "================================="
+
+          free -h
+
+
+          # ------------------------------------------
+          # Versions
+          # ------------------------------------------
+          echo "================================="
+          echo "Software versions"
           echo "================================="
 
           echo "Node:"
@@ -92,6 +136,7 @@ jobs:
 
           echo "PM2:"
           pm2 -v
+
 
           echo "================================="
           echo "EC2 preparation successful."
@@ -111,7 +156,7 @@ jobs:
             --exclude=node_modules \
             --exclude=.next \
             --exclude=.git \
-            --exclude=terraform/.terraform \
+            --exclude='terraform/.terraform' \
             --exclude='terraform/*.tfstate' \
             --exclude='terraform/*.tfstate.*' \
             -czf - . | \
@@ -128,26 +173,30 @@ jobs:
       # 5. Create production environment
       # ==========================================
       - name: Create production environment
+        env:
+          AUTH_SECRET_VALUE: ${{ secrets.AUTH_SECRET }}
+          HEALTH_WEBHOOK_SECRET_VALUE: ${{ secrets.HEALTH_WEBHOOK_SECRET }}
         run: |
-          ssh -i ~/.ssh/fittrek.pem ubuntu@${{ secrets.EC2_HOST }} "bash -s" <<'REMOTE_SCRIPT'
+          ssh -i ~/.ssh/fittrek.pem ubuntu@${{ secrets.EC2_HOST }} \
+            "AUTH_SECRET_VALUE='$AUTH_SECRET_VALUE' HEALTH_WEBHOOK_SECRET_VALUE='$HEALTH_WEBHOOK_SECRET_VALUE' bash -s" <<'REMOTE_SCRIPT'
+
           set -e
 
           cd /home/ubuntu/fittrek
 
           echo "Creating production environment..."
 
-          cat > .env <<'ENV_FILE'
+          cat > .env <<ENV_FILE
           DATABASE_URL="file:./dev.db"
-          AUTH_SECRET="${AUTH_SECRET_VALUE}"
-          HEALTH_WEBHOOK_SECRET="${HEALTH_WEBHOOK_SECRET_VALUE}"
+          AUTH_SECRET="$AUTH_SECRET_VALUE"
+          HEALTH_WEBHOOK_SECRET="$HEALTH_WEBHOOK_SECRET_VALUE"
           ENV_FILE
+
+          chmod 600 .env
 
           echo "Production environment created."
 
           REMOTE_SCRIPT
-        env:
-          AUTH_SECRET_VALUE: ${{ secrets.AUTH_SECRET }}
-          HEALTH_WEBHOOK_SECRET_VALUE: ${{ secrets.HEALTH_WEBHOOK_SECRET }}
 
 
       # ==========================================
@@ -156,6 +205,7 @@ jobs:
       - name: Install dependencies
         run: |
           ssh -i ~/.ssh/fittrek.pem ubuntu@${{ secrets.EC2_HOST }} "bash -s" <<'REMOTE_SCRIPT'
+
           set -e
 
           cd /home/ubuntu/fittrek
@@ -177,6 +227,7 @@ jobs:
       - name: Generate Prisma Client
         run: |
           ssh -i ~/.ssh/fittrek.pem ubuntu@${{ secrets.EC2_HOST }} "bash -s" <<'REMOTE_SCRIPT'
+
           set -e
 
           cd /home/ubuntu/fittrek
@@ -198,6 +249,7 @@ jobs:
       - name: Update database
         run: |
           ssh -i ~/.ssh/fittrek.pem ubuntu@${{ secrets.EC2_HOST }} "bash -s" <<'REMOTE_SCRIPT'
+
           set -e
 
           cd /home/ubuntu/fittrek
@@ -219,6 +271,7 @@ jobs:
       - name: Build application
         run: |
           ssh -i ~/.ssh/fittrek.pem ubuntu@${{ secrets.EC2_HOST }} "bash -s" <<'REMOTE_SCRIPT'
+
           set -e
 
           cd /home/ubuntu/fittrek
@@ -240,6 +293,7 @@ jobs:
       - name: Start application with PM2
         run: |
           ssh -i ~/.ssh/fittrek.pem ubuntu@${{ secrets.EC2_HOST }} "bash -s" <<'REMOTE_SCRIPT'
+
           set -e
 
           cd /home/ubuntu/fittrek
@@ -277,6 +331,7 @@ jobs:
           sleep 10
 
           ssh -i ~/.ssh/fittrek.pem ubuntu@${{ secrets.EC2_HOST }} "bash -s" <<'REMOTE_SCRIPT'
+
           set -e
 
           echo "================================="
